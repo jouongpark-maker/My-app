@@ -2,3 +2,5 @@ Flask
 python-docx
 Pillow
 gunicorn
+arabic-reshaper
+python-bidi
