@@ -1,3 +1,4 @@
+
 from flask import Flask, render_template, request, send_file
 from docx import Document
 from PIL import Image, ImageDraw, ImageFont
@@ -11,10 +12,15 @@ app = Flask(__name__)
 UPLOAD_FOLDER = 'tmp'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# کش کردن متون پردازش شده برای بالا بردن چشمگیر سرعت سرور
+_cache = {}
 def reshape_text(text):
-    # این تابع کلمات فارسی را درست مچ می‌کند و جهت نگارش را راست به چپ می‌کند
+    if text in _cache:
+        return _cache[text]
     reshaped = arabic_reshaper.reshape(text)
-    return get_display(reshaped)
+    result = get_display(reshaped)
+    _cache[text] = result
+    return result
 
 def process_novel_to_images(word_path, bg_path, title_font_path, body_font_path, vol_num, ch_num):
     doc = Document(word_path)
@@ -23,21 +29,12 @@ def process_novel_to_images(word_path, bg_path, title_font_path, body_font_path,
     bg_image = Image.open(bg_path)
     img_w, img_h = bg_image.size
     
-    # تنظیم هوشمند سایز فونت بر اساس ابعاد بزرگ بک‌گراند شما
-    body_font_size = int(img_h * 0.022) # متناسب با ارتفاع بوم
+    body_font_size = int(img_h * 0.022) 
     title_font_size = int(img_h * 0.04)
     
-    try:
-        font_body = ImageFont.truetype(body_font_path, body_font_size)
-    except:
-        font_body = ImageFont.load_default()
-        
-    try:
-        font_title = ImageFont.truetype(title_font_path, title_font_size)
-    except:
-        font_title = font_body
+    font_body = ImageFont.truetype(body_font_path, body_font_size) if body_font_path else ImageFont.load_default()
+    font_title = ImageFont.truetype(title_font_path, title_font_size) if title_font_path else font_body
 
-    # حاشیه‌های امن برای کادر مشکی رنگ داخل تصاویر شما
     margin_left = int(img_w * 0.12)
     margin_right = int(img_w * 0.12)
     margin_top = int(img_h * 0.14)
@@ -49,24 +46,25 @@ def process_novel_to_images(word_path, bg_path, title_font_path, body_font_path,
     current_page_text = []
     current_height = 0
     
-    # پردازش و خط‌شکنی هوشمند متون فارسی
+    # الگوریتم سریع‌تر برای شکستن خطوط
     for para in paragraphs:
         words = para.split(' ')
         current_line = ""
         
         for word in words:
             test_line = current_line + " " + word if current_line else word
-            # تست اندازه با متنی که موقتاً برای محاسبه، فرمت فارسی گرفته
+            # برای تست ابعاد خط، از کش سریع استفاده میکنیم
             test_reshaped = reshape_text(test_line)
             bbox = font_body.getbbox(test_reshaped)
             line_w = bbox[2] - bbox[0]
-            line_h = (bbox[3] - bbox[1]) + int(body_font_size * 0.5) # فاصله خطوط مناسب
+            line_h = (bbox[3] - bbox[1]) + int(body_font_size * 0.5)
             
             if line_w <= max_width:
                 current_line = test_line
             else:
-                current_page_text.append(current_line)
-                current_height += line_h
+                if current_line:
+                    current_page_text.append(current_line)
+                    current_height += line_h
                 current_line = word
                 
                 if current_height >= max_height:
@@ -76,7 +74,7 @@ def process_novel_to_images(word_path, bg_path, title_font_path, body_font_path,
         
         if current_line:
             current_page_text.append(current_line)
-            current_height += int(body_font_size * 1.2) # فاصله بین پاراگراف‌ها
+            current_height += int(body_font_size * 1.2)
             
         if current_height >= max_height:
             pages_data.append(current_page_text)
@@ -93,16 +91,13 @@ def process_novel_to_images(word_path, bg_path, title_font_path, body_font_path,
         for idx, page_lines in enumerate(pages_data):
             page_img = bg_image.copy()
             draw = ImageDraw.Draw(page_img)
-            
             y_offset = margin_top
             
-            # صفحه اول: چاپ عنوان با فونت افسانه در وسط صفحه
             if idx == 0:
                 ch_title = reshape_text(f"چپتر {ch_num}")
                 draw.text((img_w // 2, y_offset), ch_title, font=font_title, fill="#ffd700", anchor="mm")
                 y_offset += title_font_size + int(body_font_size * 2)
             
-            # رندر کردن خطوط متن با فونت تیتر به صورت کاملا فارسی و راست‌چین
             for line in page_lines:
                 if not line.strip():
                     continue
@@ -112,7 +107,8 @@ def process_novel_to_images(word_path, bg_path, title_font_path, body_font_path,
                 y_offset += (bbox[3] - bbox[1]) + int(body_font_size * 0.5)
             
             img_byte_arr = io.BytesIO()
-            page_img.save(img_byte_arr, format='WEBP', quality=90)
+            # بهینه‌سازی فشرده‌سازی برای ملو کردن کار سرور
+            page_img.save(img_byte_arr, format='WEBP', quality=80, method=2)
             img_byte_arr.seek(0)
             
             image_filename = f"{idx + 1:0{padding}d}.webp"
@@ -140,7 +136,6 @@ def index():
         word_file.save(word_path)
         bg_file.save(bg_path)
         
-        # ذخیره یا استفاده از فونت‌های آپلود شده
         title_font_path = os.path.join(UPLOAD_FOLDER, title_font.filename) if title_font and title_font.filename != '' else ""
         body_font_path = os.path.join(UPLOAD_FOLDER, body_font.filename) if body_font and body_font.filename != '' else ""
         
@@ -202,4 +197,4 @@ def index():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-            
+        
